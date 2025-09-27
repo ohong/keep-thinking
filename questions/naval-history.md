@@ -39,8 +39,13 @@ Explanation: German wolfpack tactics, or Wolfsrudel, coordinated U-boats to atta
 ---
 
 ### Question Q4
-Question: True or False — The Japanese battleship Yamato carried the heaviest naval artillery ever mounted on a warship.
-Answer: True
+Question: Which battleship carried the heaviest naval artillery ever mounted on a warship?
+Options:
+- A) Yamato
+- B) USS Iowa
+- C) Bismarck
+- D) HMS Vanguard
+Answer: A
 Explanation: Yamato and her sister Musashi mounted 18.1-inch guns, the largest caliber ever fitted to a battleship, surpassing all contemporary navies.
 
 ---
@@ -94,8 +99,13 @@ Explanation: Centimetric radar on escorts and aircraft, paired with high-frequen
 ---
 
 ### Question Q9
-Question: Short Answer — Name the U.S. Navy heavy cruiser that was torpedoed and sunk after delivering atomic bomb components to Tinian in July 1945.
-Answer: USS Indianapolis
+Question: Which U.S. Navy heavy cruiser was torpedoed and sunk after delivering atomic bomb components to Tinian in July 1945?
+Options:
+- A) USS Helena
+- B) USS Indianapolis
+- C) USS Juneau
+- D) USS Portland
+Answer: B
 Explanation: USS Indianapolis (CA-35) completed a critical delivery mission before being sunk by a Japanese submarine, leading to a tragic loss of life.
 
 ---

@@ -152,7 +152,7 @@ const KeepThinkingLogo = ({ bannerText }: { bannerText?: string }) => (
  * Utility helpers
  */
 const QUESTION_DIR = path.join(__dirname, "questions");
-const DEFAULT_BANK_ID = "naval-history";
+const DEFAULT_BANK_ID = "ml-basics";
 
 const QUESTION_SEPARATOR = /\n---\n/g;
 
@@ -743,6 +743,7 @@ const App: React.FC = () => {
   const [sessionStart, setSessionStart] = useState<number | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [sessionCompletedMessage, setSessionCompletedMessage] = useState<string | null>(null);
+  const [awaitingAdvance, setAwaitingAdvance] = useState(false);
 
   const shutdown = useCallback(() => {
     if (timerRef.current) {
@@ -883,6 +884,7 @@ const App: React.FC = () => {
       setCorrectCount(0);
       setFeedback(null);
       setAnswerInput("");
+      setAwaitingAdvance(false);
       setSessionCompletedMessage(null);
       setActiveQuestions([]);
       setSelectedBankId(null);
@@ -905,6 +907,7 @@ const App: React.FC = () => {
       questionOrderRef.current = [];
       setQuestionCursor(0);
       setSessionCompletedMessage("Claude Code task complete - return to your session");
+      setAwaitingAdvance(false);
     }
 
     previousActiveRef.current = sessionActive;
@@ -931,9 +934,20 @@ const App: React.FC = () => {
     };
   }, []);
 
+  const advanceToNextQuestion = useCallback(() => {
+    setAwaitingAdvance(false);
+    setFeedback(null);
+    setAnswerInput("");
+    setQuestionCursor(previous => {
+      const order = questionOrderRef.current;
+      if (!order.length) return previous;
+      return (previous + 1) % order.length;
+    });
+  }, []);
+
   const handleSubmit = useCallback(
     (rawInput: string) => {
-      if (!sessionActive || !currentQuestion) return;
+      if (!sessionActive || !currentQuestion || awaitingAdvance) return;
 
       const evaluation = evaluateAnswer(currentQuestion, rawInput);
       if (evaluation.status === "invalid") {
@@ -946,6 +960,7 @@ const App: React.FC = () => {
       }
 
       setAskedCount(previous => previous + 1);
+      setAwaitingAdvance(true);
 
       if (evaluation.status === "correct") {
         setCorrectCount(previous => previous + 1);
@@ -961,20 +976,20 @@ const App: React.FC = () => {
           questionId: currentQuestion.id,
         });
       }
-
-      setAnswerInput("");
-      setQuestionCursor(previous => {
-        const order = questionOrderRef.current;
-        if (!order.length) return previous;
-        return (previous + 1) % order.length;
-      });
     },
-    [sessionActive, currentQuestion],
+    [sessionActive, currentQuestion, awaitingAdvance],
   );
 
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
       shutdown();
+      return;
+    }
+
+    if (awaitingAdvance) {
+      if (key.return) {
+        advanceToNextQuestion();
+      }
       return;
     }
 
@@ -1098,7 +1113,9 @@ const App: React.FC = () => {
             </Text>
           </Box>
 
-          <Text color="gray">Press Enter to submit. Ctrl+C to exit.</Text>
+          <Text color="gray">
+            {awaitingAdvance ? "Press Enter to continue. Ctrl+C to exit." : "Press Enter to submit. Ctrl+C to exit."}
+          </Text>
         </Box>
       )}
 

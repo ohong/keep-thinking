@@ -39,8 +39,13 @@ Explanation: The F1 score balances precision and recall, making it more informat
 ---
 
 ### Question Q4
-Question: True or False — Gradient descent can get stuck in local minima when training neural networks.
-Answer: True
+Question: Which statement best describes gradient descent when training neural networks on non-convex loss surfaces?
+Options:
+- A) It always finds the global minimum because neural networks are convex.
+- B) It can converge to local minima or saddle points rather than the global minimum.
+- C) It only converges when the loss surface is perfectly flat.
+- D) It fails entirely unless the learning rate is zero.
+Answer: B
 Explanation: Gradient descent follows the local slope of the loss surface, so it can converge to local minima or saddle points instead of the global minimum.
 
 ---
@@ -82,15 +87,25 @@ Explanation: Validation data guides hyperparameter tuning and early stopping by 
 ---
 
 ### Question Q8
-Question: Short Answer — Name the technique that reduces dimensionality by projecting data onto orthogonal axes capturing maximum variance.
-Answer: Principal component analysis
+Question: Which technique reduces dimensionality by projecting data onto orthogonal axes that capture the maximum variance?
+Options:
+- A) Principal component analysis
+- B) k-means clustering
+- C) Naive Bayes classification
+- D) Gradient boosting
+Answer: A
 Explanation: Principal component analysis (PCA) transforms data into orthogonal components ordered by variance, enabling dimensionality reduction while retaining key structure.
 
 ---
 
 ### Question Q9
-Question: True or False — In reinforcement learning, the agent learns by receiving explicit labels for each action.
-Answer: False
+Question: How does a reinforcement learning agent obtain feedback while learning a policy?
+Options:
+- A) It receives explicit labeled actions for every state from a supervisor.
+- B) It interacts with the environment and learns from reward signals.
+- C) It clusters unlabeled observations to infer correct actions.
+- D) It reads gradients provided directly by a teacher network.
+Answer: B
 Explanation: Reinforcement learning agents learn from reward signals rather than labeled action outputs, relying on trial-and-error interactions with the environment.
 
 ---
