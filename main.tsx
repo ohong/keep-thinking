@@ -85,6 +85,12 @@ interface ParsedQuestionBlock {
   explanation: string;
 }
 
+interface QuestionBank {
+  id: string;
+  title: string;
+  questions: Question[];
+}
+
 /**
  * Claude session message definitions (subset of what we need)
  */
@@ -115,9 +121,38 @@ interface MessageData {
 }
 
 /**
+ * Keep Thinking Logo Component
+ */
+const KeepThinkingLogo = ({ bannerText }: { bannerText?: string }) => (
+  <Box marginTop={2} marginBottom={2} flexDirection="column" alignItems="center">
+    <Text color="red" bold>
+      {`██╗  ██╗███████╗███████╗██████╗ \n`}
+      {`██║ ██╔╝██╔════╝██╔════╝██╔══██╗\n`}
+      {`█████╔╝ █████╗  █████╗  ██████╔╝\n`}
+      {`██╔═██╗ ██╔══╝  ██╔══╝  ██╔═══╝ \n`}
+      {`██║  ██╗███████╗███████╗██║     \n`}
+      {`╚═╝  ╚═╝╚══════╝╚══════╝╚═╝     \n`}
+      {`                                 `}
+    </Text>
+    <Text color="green" bold>
+      {`████████╗██╗  ██╗██╗███╗   ██╗██╗  ██╗██╗███╗   ██╗ ██████╗ \n`}
+      {`╚══██╔══╝██║  ██║██║████╗  ██║██║ ██╔╝██║████╗  ██║██╔════╝ \n`}
+      {`   ██║   ███████║██║██╔██╗ ██║█████╔╝ ██║██╔██╗ ██║██║  ███╗\n`}
+      {`   ██║   ██╔══██║██║██║╚██╗██║██╔═██╗ ██║██║╚██╗██║██║   ██║\n`}
+      {`   ██║   ██║  ██║██║██║ ╚████║██║  ██╗██║██║ ╚████║╚██████╔╝\n`}
+      {`   ╚═╝   ╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝ `}
+    </Text>
+    <Text color="gray" dimColor>
+      {bannerText || "https://github.com/ohong/keep-thinking"}
+    </Text>
+  </Box>
+);
+
+/**
  * Utility helpers
  */
 const QUESTION_DIR = path.join(__dirname, "questions");
+const DEFAULT_BANK_ID = "naval-history";
 
 const QUESTION_SEPARATOR = /\n---\n/g;
 
@@ -262,28 +297,46 @@ const toQuestion = (block: ParsedQuestionBlock): Question => {
   } satisfies Question;
 };
 
-const loadQuestionBank = async (): Promise<Question[]> => {
+const toTitleCase = (value: string) =>
+  value
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+
+const loadQuestionBanks = async (): Promise<QuestionBank[]> => {
   if (!existsSync(QUESTION_DIR)) {
     throw new Error(`Question directory not found at ${QUESTION_DIR}`);
   }
 
   const entries = readdirSync(QUESTION_DIR).filter(entry => entry.endsWith(".md"));
 
-  const questions: Question[] = [];
+  const banks: QuestionBank[] = [];
   for (const entry of entries) {
     const fullPath = path.join(QUESTION_DIR, entry);
     const content = await readFile(fullPath, "utf-8");
     const parsedBlocks = parseQuestionBlocks(content);
-    for (const block of parsedBlocks) {
-      questions.push(toQuestion(block));
+    if (parsedBlocks.length === 0) {
+      continue;
     }
+
+    const fileId = path.parse(entry).name;
+    const titleMatch = content.match(/^#\s+(.+)$/m);
+    const derivedTitle = titleMatch ? titleMatch[1].trim() : toTitleCase(fileId.replace(/[-_]+/g, " "));
+    const questions = parsedBlocks.map(toQuestion);
+
+    if (questions.length === 0) {
+      continue;
+    }
+
+    banks.push({ id: fileId, title: derivedTitle, questions });
   }
 
-  if (questions.length === 0) {
-    throw new Error("No questions found in the question bank");
+  if (banks.length === 0) {
+    throw new Error("No question banks found in the question directory");
   }
 
-  return questions;
+  return banks;
 };
 
 /**
@@ -674,7 +727,9 @@ const App: React.FC = () => {
   const previousActiveRef = useRef(false);
   const questionOrderRef = useRef<number[]>([]);
 
-  const [questions, setQuestions] = useState<Question[]>([]);
+  const [questionBanks, setQuestionBanks] = useState<QuestionBank[]>([]);
+  const [activeQuestions, setActiveQuestions] = useState<Question[]>([]);
+  const [selectedBankId, setSelectedBankId] = useState<string | null>(null);
   const [questionOrder, setQuestionOrder] = useState<number[]>([]);
   const [questionCursor, setQuestionCursor] = useState(0);
   const [sessionActive, setSessionActive] = useState(false);
@@ -689,20 +744,71 @@ const App: React.FC = () => {
   const [elapsedMs, setElapsedMs] = useState(0);
   const [sessionCompletedMessage, setSessionCompletedMessage] = useState<string | null>(null);
 
+  const shutdown = useCallback(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    monitorRef.current?.stop();
+    exit();
+  }, [exit]);
+
+  const selectedBank = useMemo(
+    () => questionBanks.find(bank => bank.id === selectedBankId) ?? null,
+    [questionBanks, selectedBankId],
+  );
+
+  const defaultQuizTitle = useMemo(() => {
+    const preferred =
+      questionBanks.find(bank => bank.id === DEFAULT_BANK_ID) ?? questionBanks[0] ?? null;
+    return preferred?.title ?? "Loading question set...";
+  }, [questionBanks]);
+
   const currentQuestion = useMemo(() => {
-    if (!questions.length || !questionOrder.length) return null;
+    if (!activeQuestions.length || !questionOrder.length) return null;
     const normalizedCursor = questionCursor % questionOrder.length;
     const questionIndex = questionOrder[normalizedCursor];
-    return questions[questionIndex];
-  }, [questions, questionOrder, questionCursor]);
+    return activeQuestions[questionIndex];
+  }, [activeQuestions, questionOrder, questionCursor]);
+
+  const activateBank = useCallback(
+    (bank: QuestionBank) => {
+      if (!sessionActive) return;
+      if (!bank.questions.length) return;
+
+      setSelectedBankId(bank.id);
+      setActiveQuestions(bank.questions);
+      const order = shuffle([...bank.questions.keys()]);
+      questionOrderRef.current = order;
+      setQuestionOrder(order);
+      setQuestionCursor(0);
+      setAskedCount(0);
+      setCorrectCount(0);
+      setFeedback(null);
+      setAnswerInput("");
+      setSessionCompletedMessage(null);
+
+      const startTime = Date.now();
+      setSessionStart(startTime);
+      setElapsedMs(0);
+
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+      timerRef.current = setInterval(() => {
+        setElapsedMs(Date.now() - startTime);
+      }, 1000);
+    },
+    [sessionActive],
+  );
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const loaded = await loadQuestionBank();
+        const loaded = await loadQuestionBanks();
         if (!cancelled) {
-          setQuestions(loaded);
+          setQuestionBanks(loaded);
         }
       } catch (error) {
         if (!cancelled) {
@@ -765,31 +871,24 @@ const App: React.FC = () => {
     const justDeactivated = !sessionActive && previousActiveRef.current;
 
     if (justActivated) {
-      if (questions.length === 0) {
-        previousActiveRef.current = sessionActive;
-        return;
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
       }
 
-      const order = shuffle([...questions.keys()]);
-      questionOrderRef.current = order;
-      setQuestionOrder(order);
+      questionOrderRef.current = [];
+      setQuestionOrder([]);
       setQuestionCursor(0);
       setAskedCount(0);
       setCorrectCount(0);
       setFeedback(null);
       setAnswerInput("");
       setSessionCompletedMessage(null);
-
-      const startTime = Date.now();
-      setSessionStart(startTime);
+      setActiveQuestions([]);
+      setSelectedBankId(null);
+      setSessionStart(null);
       setElapsedMs(0);
 
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
-      timerRef.current = setInterval(() => {
-        setElapsedMs(Date.now() - startTime);
-      }, 1000);
     }
 
     if (justDeactivated) {
@@ -800,11 +899,29 @@ const App: React.FC = () => {
       setSessionStart(null);
       setElapsedMs(0);
       setAnswerInput("");
+      setActiveQuestions([]);
+      setSelectedBankId(null);
+      setQuestionOrder([]);
+      questionOrderRef.current = [];
+      setQuestionCursor(0);
       setSessionCompletedMessage("Claude Code task complete - return to your session");
     }
 
     previousActiveRef.current = sessionActive;
-  }, [sessionActive, questions.length]);
+  }, [sessionActive]);
+
+  useEffect(() => {
+    if (!sessionActive) return;
+    if (selectedBankId) return;
+    if (!questionBanks.length) return;
+
+    const preferredBank =
+      questionBanks.find(bank => bank.id === DEFAULT_BANK_ID) ?? questionBanks[0] ?? null;
+
+    if (preferredBank) {
+      activateBank(preferredBank);
+    }
+  }, [activateBank, questionBanks, selectedBankId, sessionActive]);
 
   useEffect(() => {
     return () => {
@@ -857,11 +974,7 @@ const App: React.FC = () => {
 
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
-      monitorRef.current?.stop();
-      exit();
+      shutdown();
       return;
     }
 
@@ -870,9 +983,13 @@ const App: React.FC = () => {
     }
 
     if (key.return) {
-      if (answerInput.trim()) {
-        handleSubmit(answerInput);
+      const raw = answerInput;
+      if (raw.trim().toLowerCase() === "/exit") {
+        shutdown();
+        return;
       }
+
+      handleSubmit(raw);
       return;
     }
 
@@ -882,19 +999,44 @@ const App: React.FC = () => {
     }
 
     if (currentQuestion.type === "multiple-choice") {
-      const normalized = input.replace(/[^A-Za-z]/g, "").toUpperCase();
-      if (normalized.length === 1) {
-        handleSubmit(normalized);
+      if (answerInput.startsWith("/")) {
+        if (input) {
+          setAnswerInput(value => value + input);
+        }
         return;
       }
+
+      if (input === "/") {
+        setAnswerInput("/");
+        return;
+      }
+
+      const normalized = input.replace(/[^A-Za-z]/g, "").toUpperCase();
+      if (normalized.length === 1) {
+        setAnswerInput(normalized);
+      }
+      return;
     }
 
     if (currentQuestion.type === "true-false") {
-      const normalized = input.toLowerCase();
-      if (["t", "f", "y", "n"].includes(normalized)) {
-        handleSubmit(normalized);
+      if (answerInput.startsWith("/")) {
+        if (input) {
+          setAnswerInput(value => value + input);
+        }
         return;
       }
+
+      if (input === "/") {
+        setAnswerInput("/");
+        return;
+      }
+
+      const normalized = input.toLowerCase();
+      if (["t", "y", "f", "n"].includes(normalized)) {
+        const value = normalized === "y" ? "T" : normalized === "n" ? "F" : normalized.toUpperCase();
+        setAnswerInput(value);
+      }
+      return;
     }
 
     if (input) {
@@ -909,6 +1051,7 @@ const App: React.FC = () => {
 
   return (
     <Box flexDirection="column" paddingX={1} paddingY={1} gap={1}>
+      <KeepThinkingLogo />
       <Box justifyContent="space-between">
         <Text color={statusColor}>{statusText}</Text>
         <Text color="yellow">Timer: {timerDisplay}</Text>
@@ -919,12 +1062,18 @@ const App: React.FC = () => {
         <Text color="blue">Score: {correctCount}/{askedCount}</Text>
       </Box>
 
+      <Text color="cyan">Quiz: {selectedBank ? selectedBank.title : defaultQuizTitle}</Text>
+
       {monitorStatus === "pending" && (
         <Text color="gray">Waiting for Claude Code activity...</Text>
       )}
 
       {monitorStatus === "error" && monitorMessage && (
         <Text color="red">{monitorMessage}</Text>
+      )}
+
+      {sessionActive && !currentQuestion && (
+        <Text color="gray">Preparing {defaultQuizTitle} quiz...</Text>
       )}
 
       {sessionActive && currentQuestion && (

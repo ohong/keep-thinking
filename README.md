@@ -1,5 +1,7 @@
 # keep-thinking
 
+![Screenshot](screenshot.png)
+
 A smart quiz application that helps you learn new things while waiting for AI to code.
 
 ## How it works
