@@ -164,6 +164,8 @@ const DEFAULT_STATUS_BAR = {
   idle: "Get busy coding",
 };
 
+const FEEDBACK_ADVANCE_DELAY_MS = 800;
+
 const formatDuration = (milliseconds: number) => {
   const safeMs = Number.isFinite(milliseconds) && milliseconds > 0 ? milliseconds : 0;
   const totalSeconds = Math.floor(safeMs / 1000);
@@ -711,19 +713,52 @@ const evaluateAnswer = (question: Question, rawInput: string): EvaluationResult 
   return { status };
 };
 
+const formatSubmittedAnswer = (question: Question, rawInput: string) => {
+  const trimmed = rawInput.trim();
+  if (!trimmed) {
+    return "(no answer)";
+  }
+
+  if (question.type === "multiple-choice") {
+    const normalized = trimmed.replace(/[^A-Za-z]/g, "").charAt(0).toUpperCase();
+    const option = question.options.find(item => item.label.toUpperCase() === normalized);
+    if (option) {
+      return `${option.label}) ${option.text}`;
+    }
+    return normalized || trimmed;
+  }
+
+  if (question.type === "true-false") {
+    const normalized = trimmed.toLowerCase();
+    if (["t", "true", "y", "yes"].includes(normalized)) {
+      return "True";
+    }
+    if (["f", "false", "n", "no"].includes(normalized)) {
+      return "False";
+    }
+  }
+
+  return trimmed;
+};
+
 /**
  * Ink UI
  */
 interface FeedbackState {
   type: "success" | "error" | "info";
-  text: string;
+  heading: string;
   questionId: string;
+  userAnswer: string;
+  correctAnswer?: string;
+  explanation?: string;
+  detail?: string;
 }
 
 const App: React.FC = () => {
   const { exit } = useApp();
   const monitorRef = useRef<ClaudeSessionMonitor | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const advanceDelayRef = useRef<NodeJS.Timeout | null>(null);
   const previousActiveRef = useRef(false);
   const questionOrderRef = useRef<number[]>([]);
 
@@ -744,15 +779,56 @@ const App: React.FC = () => {
   const [elapsedMs, setElapsedMs] = useState(0);
   const [sessionCompletedMessage, setSessionCompletedMessage] = useState<string | null>(null);
   const [awaitingAdvance, setAwaitingAdvance] = useState(false);
+  const [advanceEnabled, setAdvanceEnabled] = useState(false);
+  const [quizRunning, setQuizRunning] = useState(false);
+  const [autoStartEnabled, setAutoStartEnabled] = useState(true);
 
-  const shutdown = useCallback(() => {
+  const clearAdvanceDelay = useCallback(() => {
+    if (advanceDelayRef.current) {
+      clearTimeout(advanceDelayRef.current);
+      advanceDelayRef.current = null;
+    }
+  }, []);
+
+  const stopTimer = useCallback(() => {
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
+  }, []);
+
+  const resetQuizState = useCallback(
+    (options?: { message?: string; preserveBank?: boolean }) => {
+      const { message = null, preserveBank = false } = options ?? {};
+      stopTimer();
+      clearAdvanceDelay();
+      questionOrderRef.current = [];
+      setQuestionOrder([]);
+      setQuestionCursor(0);
+      setAskedCount(0);
+      setCorrectCount(0);
+      setAnswerInput("");
+      setFeedback(null);
+      setAwaitingAdvance(false);
+      setAdvanceEnabled(false);
+      setSessionStart(null);
+      setElapsedMs(0);
+      setQuizRunning(false);
+      if (!preserveBank) {
+        setActiveQuestions([]);
+        setSelectedBankId(null);
+      }
+      setSessionCompletedMessage(message);
+    },
+    [clearAdvanceDelay, stopTimer],
+  );
+
+  const shutdown = useCallback(() => {
+    stopTimer();
+    clearAdvanceDelay();
     monitorRef.current?.stop();
     exit();
-  }, [exit]);
+  }, [clearAdvanceDelay, exit, stopTimer]);
 
   const selectedBank = useMemo(
     () => questionBanks.find(bank => bank.id === selectedBankId) ?? null,
@@ -787,20 +863,23 @@ const App: React.FC = () => {
       setCorrectCount(0);
       setFeedback(null);
       setAnswerInput("");
+      setAwaitingAdvance(false);
+      setAdvanceEnabled(false);
+      clearAdvanceDelay();
+      setQuizRunning(true);
+      setAutoStartEnabled(true);
       setSessionCompletedMessage(null);
 
       const startTime = Date.now();
       setSessionStart(startTime);
       setElapsedMs(0);
 
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
+      stopTimer();
       timerRef.current = setInterval(() => {
         setElapsedMs(Date.now() - startTime);
       }, 1000);
     },
-    [sessionActive],
+    [clearAdvanceDelay, sessionActive, stopTimer],
   );
 
   useEffect(() => {
@@ -872,49 +951,28 @@ const App: React.FC = () => {
     const justDeactivated = !sessionActive && previousActiveRef.current;
 
     if (justActivated) {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
+      if (!quizRunning) {
+        resetQuizState();
       }
-
-      questionOrderRef.current = [];
-      setQuestionOrder([]);
-      setQuestionCursor(0);
-      setAskedCount(0);
-      setCorrectCount(0);
-      setFeedback(null);
-      setAnswerInput("");
-      setAwaitingAdvance(false);
-      setSessionCompletedMessage(null);
-      setActiveQuestions([]);
-      setSelectedBankId(null);
-      setSessionStart(null);
-      setElapsedMs(0);
-
+      setAutoStartEnabled(true);
     }
 
     if (justDeactivated) {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
+      if (quizRunning) {
+        setSessionCompletedMessage("Claude Code task complete - return to your session");
+      } else {
+        resetQuizState({ message: "Claude Code task complete - return to your session" });
       }
-      setSessionStart(null);
-      setElapsedMs(0);
-      setAnswerInput("");
-      setActiveQuestions([]);
-      setSelectedBankId(null);
-      setQuestionOrder([]);
-      questionOrderRef.current = [];
-      setQuestionCursor(0);
-      setSessionCompletedMessage("Claude Code task complete - return to your session");
-      setAwaitingAdvance(false);
+      setAutoStartEnabled(true);
     }
 
     previousActiveRef.current = sessionActive;
-  }, [sessionActive]);
+  }, [quizRunning, resetQuizState, sessionActive]);
 
   useEffect(() => {
     if (!sessionActive) return;
+    if (!autoStartEnabled) return;
+    if (quizRunning) return;
     if (selectedBankId) return;
     if (!questionBanks.length) return;
 
@@ -924,18 +982,19 @@ const App: React.FC = () => {
     if (preferredBank) {
       activateBank(preferredBank);
     }
-  }, [activateBank, questionBanks, selectedBankId, sessionActive]);
+  }, [activateBank, autoStartEnabled, questionBanks, quizRunning, selectedBankId, sessionActive]);
 
   useEffect(() => {
     return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
+      stopTimer();
+      clearAdvanceDelay();
     };
-  }, []);
+  }, [clearAdvanceDelay, stopTimer]);
 
   const advanceToNextQuestion = useCallback(() => {
+    clearAdvanceDelay();
     setAwaitingAdvance(false);
+    setAdvanceEnabled(false);
     setFeedback(null);
     setAnswerInput("");
     setQuestionCursor(previous => {
@@ -943,41 +1002,68 @@ const App: React.FC = () => {
       if (!order.length) return previous;
       return (previous + 1) % order.length;
     });
-  }, []);
+  }, [clearAdvanceDelay]);
+
+  const handleManualEnd = useCallback(() => {
+    setAutoStartEnabled(false);
+    resetQuizState({ message: "Quiz ended. Start a new Claude Code session to begin again." });
+  }, [resetQuizState]);
 
   const handleSubmit = useCallback(
     (rawInput: string) => {
-      if (!sessionActive || !currentQuestion || awaitingAdvance) return;
+      if (!quizRunning || !currentQuestion || awaitingAdvance) return;
 
+      setSessionCompletedMessage(null);
       const evaluation = evaluateAnswer(currentQuestion, rawInput);
+      const userAnswerDisplay = formatSubmittedAnswer(currentQuestion, rawInput);
+      const invalidDetail =
+        currentQuestion.type === "multiple-choice"
+          ? "Choose one of the listed options before submitting."
+          : currentQuestion.type === "true-false"
+            ? "Answer with T (True) or F (False)."
+            : "Enter a response before submitting.";
       if (evaluation.status === "invalid") {
         setFeedback({
           type: "info",
-          text: evaluation.message || "Invalid answer.",
+          heading: evaluation.message || "Invalid answer.",
+          detail: invalidDetail,
           questionId: currentQuestion.id,
+          userAnswer: userAnswerDisplay,
         });
         return;
       }
 
       setAskedCount(previous => previous + 1);
       setAwaitingAdvance(true);
+      setAdvanceEnabled(false);
+      clearAdvanceDelay();
+      advanceDelayRef.current = setTimeout(() => {
+        setAdvanceEnabled(true);
+        advanceDelayRef.current = null;
+      }, FEEDBACK_ADVANCE_DELAY_MS);
 
       if (evaluation.status === "correct") {
         setCorrectCount(previous => previous + 1);
         setFeedback({
           type: "success",
-          text: "✓ Correct!",
+          heading: "✓ Correct!",
           questionId: currentQuestion.id,
+          userAnswer: userAnswerDisplay,
+          correctAnswer: currentQuestion.answerDisplay,
+          explanation: currentQuestion.explanation,
         });
       } else {
         setFeedback({
           type: "error",
-          text: `✗ Incorrect. The answer is ${currentQuestion.answerDisplay} because ${currentQuestion.explanation}`,
+          heading: "✗ Incorrect.",
           questionId: currentQuestion.id,
+          userAnswer: userAnswerDisplay,
+          correctAnswer: currentQuestion.answerDisplay,
+          explanation: currentQuestion.explanation,
         });
       }
     },
-    [sessionActive, currentQuestion, awaitingAdvance],
+    [awaitingAdvance, clearAdvanceDelay, currentQuestion, quizRunning],
   );
 
   useInput((input, key) => {
@@ -986,25 +1072,32 @@ const App: React.FC = () => {
       return;
     }
 
+    if (key.return) {
+      const raw = answerInput;
+      const normalizedCommand = raw.trim().toLowerCase();
+      if (normalizedCommand === "/exit") {
+        shutdown();
+        return;
+      }
+      if (normalizedCommand === "/end") {
+        handleManualEnd();
+        return;
+      }
+    }
+
     if (awaitingAdvance) {
-      if (key.return) {
+      if (key.return && advanceEnabled) {
         advanceToNextQuestion();
       }
       return;
     }
 
-    if (!sessionActive || !currentQuestion) {
+    if (!quizRunning || !currentQuestion) {
       return;
     }
 
     if (key.return) {
-      const raw = answerInput;
-      if (raw.trim().toLowerCase() === "/exit") {
-        shutdown();
-        return;
-      }
-
-      handleSubmit(raw);
+      handleSubmit(answerInput);
       return;
     }
 
@@ -1059,10 +1152,16 @@ const App: React.FC = () => {
     }
   });
 
-  const statusText = sessionActive ? DEFAULT_STATUS_BAR.active : DEFAULT_STATUS_BAR.idle;
-  const statusColor = sessionActive ? "green" : "cyan";
+  const statusText = quizRunning ? DEFAULT_STATUS_BAR.active : DEFAULT_STATUS_BAR.idle;
+  const statusColor = quizRunning ? "green" : "cyan";
 
-  const timerDisplay = sessionActive && sessionStart ? formatDuration(elapsedMs) : "--:--";
+  const timerDisplay = quizRunning && sessionStart ? formatDuration(elapsedMs) : "--:--";
+  const liveAnswerPreview = answerInput
+    ? answerInput
+    : awaitingAdvance
+      ? "Answer submitted"
+      : "—";
+  const liveAnswerColor = awaitingAdvance ? "cyan" : answerInput ? "white" : "gray";
 
   return (
     <Box flexDirection="column" paddingX={1} paddingY={1} gap={1}>
@@ -1079,6 +1178,10 @@ const App: React.FC = () => {
 
       <Text color="cyan">Quiz: {selectedBank ? selectedBank.title : defaultQuizTitle}</Text>
 
+      {sessionCompletedMessage && quizRunning && (
+        <Text color="green">{sessionCompletedMessage}</Text>
+      )}
+
       {monitorStatus === "pending" && (
         <Text color="gray">Waiting for Claude Code activity...</Text>
       )}
@@ -1087,11 +1190,11 @@ const App: React.FC = () => {
         <Text color="red">{monitorMessage}</Text>
       )}
 
-      {sessionActive && !currentQuestion && (
+      {quizRunning && !currentQuestion && (
         <Text color="gray">Preparing {defaultQuizTitle} quiz...</Text>
       )}
 
-      {sessionActive && currentQuestion && (
+      {quizRunning && currentQuestion && (
         <Box flexDirection="column" gap={1}>
           <Box flexDirection="column">
             <Text>{currentQuestion.prompt}</Text>
@@ -1107,36 +1210,79 @@ const App: React.FC = () => {
             )}
           </Box>
 
-          <Box>
+          <Box
+            borderStyle="round"
+            borderColor={awaitingAdvance ? "cyan" : "white"}
+            paddingX={1}
+            paddingY={0}
+          >
             <Text>
-              Your answer: <Text color="white">{answerInput || ""}</Text>
+              <Text color="gray">Your answer:</Text> <Text color={liveAnswerColor}>{liveAnswerPreview}</Text>
             </Text>
           </Box>
 
           <Text color="gray">
-            {awaitingAdvance ? "Press Enter to continue. Ctrl+C to exit." : "Press Enter to submit. Ctrl+C to exit."}
+            {awaitingAdvance
+              ? advanceEnabled
+                ? "Press Enter to continue. Type /end to stop, Ctrl+C to exit."
+                : "Take a moment to review."
+              : "Press Enter to submit. Type /end to stop, Ctrl+C to exit."}
           </Text>
         </Box>
       )}
 
-      {!sessionActive && monitorStatus !== "error" && (
+      {!quizRunning && monitorStatus !== "error" && (
         <Box flexDirection="column" gap={1}>
-          <Text>Open a Claude Code session to start the quiz.</Text>
-          <Text color="gray">Questions pause automatically when the session ends.</Text>
+          {sessionCompletedMessage ? (
+            <Text color="green">{sessionCompletedMessage}</Text>
+          ) : sessionActive ? (
+            <>
+              <Text>Quiz paused.</Text>
+              <Text color="gray">Type /end to stay here. Trigger a new Claude Code task to restart.</Text>
+            </>
+          ) : (
+            <>
+              <Text>Open a Claude Code session to start the quiz.</Text>
+              <Text color="gray">Questions pause automatically when the session ends.</Text>
+            </>
+          )}
         </Box>
       )}
 
       {feedback && (
-        <Text
-          color={feedback.type === "success" ? "green" : feedback.type === "error" ? "red" : "yellow"}
+        <Box
+          borderStyle="round"
+          borderColor={feedback.type === "success" ? "green" : feedback.type === "error" ? "red" : "yellow"}
+          paddingX={1}
+          paddingY={feedback.explanation || feedback.detail ? 1 : 0}
+          flexDirection="column"
+          gap={0}
         >
-          {feedback.text}
-        </Text>
+          <Text color={feedback.type === "success" ? "green" : feedback.type === "error" ? "red" : "yellow"} bold>
+            {feedback.heading}
+          </Text>
+          <Text>
+            <Text color="cyan">Your answer:</Text> <Text color="white">{feedback.userAnswer}</Text>
+          </Text>
+          {feedback.type === "error" && feedback.correctAnswer && (
+            <Text>
+              <Text color="cyan">Correct answer:</Text> <Text color="white">{feedback.correctAnswer}</Text>
+            </Text>
+          )}
+          {feedback.type === "success" && feedback.correctAnswer && (
+            <Text>
+              <Text color="cyan">Matched answer:</Text> <Text color="white">{feedback.correctAnswer}</Text>
+            </Text>
+          )}
+          {feedback.detail && (
+            <Text color="yellow">{feedback.detail}</Text>
+          )}
+          {feedback.explanation && (
+            <Text color="gray">Explanation: {feedback.explanation}</Text>
+          )}
+        </Box>
       )}
 
-      {sessionCompletedMessage && !sessionActive && (
-        <Text color="green">{sessionCompletedMessage}</Text>
-      )}
     </Box>
   );
 };

@@ -8,6 +8,14 @@ A smart quiz application that helps you learn new things while waiting for AI to
 
 Keep-thinking automatically detects when you have active Claude Code sessions by monitoring `.claude/projects/**.jsonl` files. When it detects active sessions (based on recent messages with tool usage or specific trigger phrases), it presents you with educational quiz questions to keep your mind engaged during AI processing time.
 
+A "Tutor" agent (powered by [Inkeep](https://inkeep.com/)) generates the quiz questions based on what the user wants to learn:
+
+![Inkeep Agent](inkeep-agent.png)
+
+AI code review powered by [CodeRabbit](https://coderabbit.com/):
+
+![CodeRabbit](coderabbit.png)
+
 ### Key Features
 
 - **Automatic session detection**: Monitors Claude Code session files to detect when AI is actively working
