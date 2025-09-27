@@ -6,9 +6,8 @@
     "keep-thinking": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
-    "start": "tsx src/index.tsx",
-    "dev": "tsx watch src/index.tsx"
+    "start": "tsx main.tsx",
+    "dev": "tsx watch main.tsx"
   },
   "dependencies": {
     "ink": "^4.4.1",
