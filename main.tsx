@@ -1,14 +1,61 @@
 #!/usr/bin/env node
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { render, Box, Text, useApp, useInput } from "ink";
 import { existsSync, readdirSync, statSync, watch, FSWatcher } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+/**
+ * Ensure Ink receives a callable reconciler default export, even on Node releases
+ * where CJS interop returns an object instead of the legacy function shape.
+ */
+const require = createRequire(import.meta.url);
+
+const ensureReactReconcilerCompatibility = async () => {
+  const moduleNamespace = await import("react-reconciler");
+  const maybeFunction =
+    typeof moduleNamespace === "function"
+      ? moduleNamespace
+      : typeof moduleNamespace.default === "function"
+        ? moduleNamespace.default
+        : typeof (moduleNamespace as Record<string, unknown>)["module.exports"] === "function"
+          ? ((moduleNamespace as Record<string, unknown>)["module.exports"] as (...args: unknown[]) => unknown)
+          : null;
+
+  if (typeof maybeFunction === "function") {
+    // If Node already returned a function default nothing else to do.
+    if (typeof moduleNamespace.default === "function") {
+      return;
+    }
+
+    // Otherwise, patch both `default` and the CommonJS mirror so downstream imports see the function.
+    (moduleNamespace as Record<string, unknown>).default = maybeFunction;
+    (moduleNamespace as Record<string, unknown>)["module.exports"] = maybeFunction;
+    return;
+  }
+
+  // Fall back to requiring the known CJS build directly.
+  try {
+    const env = process.env.NODE_ENV === "production" ? "production.min" : "development";
+    const reconciler = require(`react-reconciler/cjs/react-reconciler.${env}.js`);
+    if (typeof reconciler === "function") {
+      (moduleNamespace as Record<string, unknown>).default = reconciler;
+      (moduleNamespace as Record<string, unknown>)["module.exports"] = reconciler;
+    }
+  } catch (_error) {
+    // Ignore; Ink will surface a clearer error if this fails.
+  }
+};
+
+await ensureReactReconcilerCompatibility();
+
+const inkModule = await import("ink");
+const { render, Box, Text, useApp, useInput } = inkModule;
 
 /**
  * Question data structures
