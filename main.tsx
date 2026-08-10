@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import * as React from "react";
 import { existsSync, readdirSync, statSync, watch, FSWatcher } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -15,6 +15,8 @@ const __dirname = path.dirname(__filename);
  * where CJS interop returns an object instead of the legacy function shape.
  */
 const require = createRequire(import.meta.url);
+
+const { memo, useCallback, useEffect, useMemo, useReducer, useRef, useState } = React;
 
 const ensureReactReconcilerCompatibility = async () => {
   const moduleNamespace = await import("react-reconciler");
@@ -55,7 +57,7 @@ const ensureReactReconcilerCompatibility = async () => {
 await ensureReactReconcilerCompatibility();
 
 const inkModule = await import("ink");
-const { render, Box, Text, useApp, useInput } = inkModule;
+const { render, Box, Text, useApp, useInput, useStdin } = inkModule;
 
 /**
  * Question data structures
@@ -123,7 +125,7 @@ interface MessageData {
 /**
  * Keep Thinking Logo Component
  */
-const KeepThinkingLogo = ({ bannerText }: { bannerText?: string }) => (
+const KeepThinkingLogo = memo(({ bannerText }: { bannerText?: string }) => (
   <Box marginTop={2} marginBottom={2} flexDirection="column" alignItems="center">
     <Text color="red" bold>
       {`██╗  ██╗███████╗███████╗██████╗ \n`}
@@ -146,7 +148,7 @@ const KeepThinkingLogo = ({ bannerText }: { bannerText?: string }) => (
       {bannerText || "https://github.com/ohong/keep-thinking"}
     </Text>
   </Box>
-);
+));
 
 /**
  * Utility helpers
@@ -754,8 +756,52 @@ interface FeedbackState {
   detail?: string;
 }
 
-const App: React.FC = () => {
+interface QuizStats {
+  attempted: number;
+  correct: number;
+}
+
+type QuizStatsAction =
+  | { type: "reset" }
+  | { type: "answered"; correct: boolean };
+
+const quizStatsReducer = (state: QuizStats, action: QuizStatsAction): QuizStats => {
+  switch (action.type) {
+    case "reset":
+      return { attempted: 0, correct: 0 };
+    case "answered":
+      return {
+        attempted: state.attempted + 1,
+        correct: action.correct ? state.correct + 1 : state.correct,
+      };
+    default:
+      return state;
+  }
+};
+
+let latestQuizStats: QuizStats = { attempted: 0, correct: 0 };
+
+const ScorePanel = memo(
+  ({ activeSessions, stats }: { activeSessions: number; stats: QuizStats }) => (
+    <Box justifyContent="space-between">
+      <Text color="magenta">Claude sessions: {activeSessions}</Text>
+      <Text color="blue">Score: {stats.correct}/{stats.attempted}</Text>
+    </Box>
+  ),
+);
+
+const StatusPanel = memo(
+  ({ statusText, statusColor, timerDisplay }: { statusText: string; statusColor: string; timerDisplay: string }) => (
+    <Box justifyContent="space-between">
+      <Text color={statusColor}>{statusText}</Text>
+      <Text color="yellow">Timer: {timerDisplay}</Text>
+    </Box>
+  ),
+);
+
+const App: React.FC = memo(() => {
   const { exit } = useApp();
+  const { setRawMode, isRawModeSupported } = useStdin();
   const monitorRef = useRef<ClaudeSessionMonitor | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const advanceDelayRef = useRef<NodeJS.Timeout | null>(null);
@@ -772,8 +818,7 @@ const App: React.FC = () => {
   const [monitorStatus, setMonitorStatus] = useState<"pending" | "ready" | "error">("pending");
   const [monitorMessage, setMonitorMessage] = useState<string | null>(null);
   const [answerInput, setAnswerInput] = useState("");
-  const [askedCount, setAskedCount] = useState(0);
-  const [correctCount, setCorrectCount] = useState(0);
+  const [quizStats, dispatchQuizStats] = useReducer(quizStatsReducer, latestQuizStats);
   const [feedback, setFeedback] = useState<FeedbackState | null>(null);
   const [sessionStart, setSessionStart] = useState<number | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -782,6 +827,30 @@ const App: React.FC = () => {
   const [advanceEnabled, setAdvanceEnabled] = useState(false);
   const [quizRunning, setQuizRunning] = useState(false);
   const [autoStartEnabled, setAutoStartEnabled] = useState(true);
+
+  useEffect(() => {
+    if (!isRawModeSupported || !setRawMode) {
+      return;
+    }
+
+    setRawMode(true);
+    return () => setRawMode(false);
+  }, [isRawModeSupported, setRawMode]);
+
+  useEffect(() => {
+    const handleSigint = () => {
+      shutdown();
+    };
+
+    process.on("SIGINT", handleSigint);
+    return () => {
+      process.off("SIGINT", handleSigint);
+    };
+  }, [shutdown]);
+
+  useEffect(() => {
+    latestQuizStats = quizStats;
+  }, [quizStats]);
 
   const clearAdvanceDelay = useCallback(() => {
     if (advanceDelayRef.current) {
@@ -805,8 +874,7 @@ const App: React.FC = () => {
       questionOrderRef.current = [];
       setQuestionOrder([]);
       setQuestionCursor(0);
-      setAskedCount(0);
-      setCorrectCount(0);
+      dispatchQuizStats({ type: "reset" });
       setAnswerInput("");
       setFeedback(null);
       setAwaitingAdvance(false);
@@ -820,7 +888,7 @@ const App: React.FC = () => {
       }
       setSessionCompletedMessage(message);
     },
-    [clearAdvanceDelay, stopTimer],
+    [clearAdvanceDelay, dispatchQuizStats, stopTimer],
   );
 
   const shutdown = useCallback(() => {
@@ -859,8 +927,7 @@ const App: React.FC = () => {
       questionOrderRef.current = order;
       setQuestionOrder(order);
       setQuestionCursor(0);
-      setAskedCount(0);
-      setCorrectCount(0);
+      dispatchQuizStats({ type: "reset" });
       setFeedback(null);
       setAnswerInput("");
       setAwaitingAdvance(false);
@@ -876,10 +943,15 @@ const App: React.FC = () => {
 
       stopTimer();
       timerRef.current = setInterval(() => {
-        setElapsedMs(Date.now() - startTime);
+        const newElapsed = Date.now() - startTime;
+        setElapsedMs(prevElapsed => {
+          const prevFormatted = formatDuration(prevElapsed);
+          const newFormatted = formatDuration(newElapsed);
+          return prevFormatted === newFormatted ? prevElapsed : newElapsed;
+        });
       }, 1000);
     },
-    [clearAdvanceDelay, sessionActive, stopTimer],
+    [clearAdvanceDelay, dispatchQuizStats, sessionActive, stopTimer],
   );
 
   useEffect(() => {
@@ -1033,7 +1105,8 @@ const App: React.FC = () => {
         return;
       }
 
-      setAskedCount(previous => previous + 1);
+      const answeredCorrectly = evaluation.status === "correct";
+      dispatchQuizStats({ type: "answered", correct: answeredCorrectly });
       setAwaitingAdvance(true);
       setAdvanceEnabled(false);
       clearAdvanceDelay();
@@ -1042,8 +1115,7 @@ const App: React.FC = () => {
         advanceDelayRef.current = null;
       }, FEEDBACK_ADVANCE_DELAY_MS);
 
-      if (evaluation.status === "correct") {
-        setCorrectCount(previous => previous + 1);
+      if (answeredCorrectly) {
         setFeedback({
           type: "success",
           heading: "✓ Correct!",
@@ -1063,7 +1135,7 @@ const App: React.FC = () => {
         });
       }
     },
-    [awaitingAdvance, clearAdvanceDelay, currentQuestion, quizRunning],
+    [awaitingAdvance, clearAdvanceDelay, currentQuestion, dispatchQuizStats, quizRunning],
   );
 
   useInput((input, key) => {
@@ -1152,29 +1224,23 @@ const App: React.FC = () => {
     }
   });
 
-  const statusText = quizRunning ? DEFAULT_STATUS_BAR.active : DEFAULT_STATUS_BAR.idle;
-  const statusColor = quizRunning ? "green" : "cyan";
+  const statusText = useMemo(() => quizRunning ? DEFAULT_STATUS_BAR.active : DEFAULT_STATUS_BAR.idle, [quizRunning]);
+  const statusColor = useMemo(() => quizRunning ? "green" : "cyan", [quizRunning]);
 
-  const timerDisplay = quizRunning && sessionStart ? formatDuration(elapsedMs) : "--:--";
-  const liveAnswerPreview = answerInput
+  const timerDisplay = useMemo(() => quizRunning && sessionStart ? formatDuration(elapsedMs) : "--:--", [quizRunning, sessionStart, elapsedMs]);
+  const liveAnswerPreview = useMemo(() => answerInput
     ? answerInput
     : awaitingAdvance
       ? "Answer submitted"
-      : "—";
-  const liveAnswerColor = awaitingAdvance ? "cyan" : answerInput ? "white" : "gray";
+      : "—", [answerInput, awaitingAdvance]);
+  const liveAnswerColor = useMemo(() => awaitingAdvance ? "cyan" : answerInput ? "white" : "gray", [awaitingAdvance, answerInput]);
 
   return (
     <Box flexDirection="column" paddingX={1} paddingY={1} gap={1}>
       <KeepThinkingLogo />
-      <Box justifyContent="space-between">
-        <Text color={statusColor}>{statusText}</Text>
-        <Text color="yellow">Timer: {timerDisplay}</Text>
-      </Box>
+      <StatusPanel statusText={statusText} statusColor={statusColor} timerDisplay={timerDisplay} />
 
-      <Box justifyContent="space-between">
-        <Text color="magenta">Claude sessions: {activeSessionsCount}</Text>
-        <Text color="blue">Score: {correctCount}/{askedCount}</Text>
-      </Box>
+      <ScorePanel activeSessions={activeSessionsCount} stats={quizStats} />
 
       <Text color="cyan">Quiz: {selectedBank ? selectedBank.title : defaultQuizTitle}</Text>
 
@@ -1285,6 +1351,6 @@ const App: React.FC = () => {
 
     </Box>
   );
-};
+});
 
 render(<App />);
